@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Azure File Manager</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+
+  <style>
+    body {
+      background-color: #f5f7fa;
+    }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      margin-bottom: 10px;
+      background-color: #ffffff;
+    }
+    .file-item span {
+      flex: 1;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container mt-5">
+
+    <h1 class="text-center mb-4">Azure File Manager</h1>
+
+    <!-- Login Section -->
+    <div id="login-section" class="card p-4 mx-auto" style="max-width: 500px;">
+      <h2 class="h5 text-center mb-3">Simple. Secure. Cloud File Access.</h2>
+      <p class="text-muted text-center small">
+        Upload, access, and manage your files securely in the cloud from anywhere.
+      </p>
+      <ul class="small text-muted mb-4">
+        <li>🔒 Secure Google Login</li>
+        <li>☁️ Easy cloud uploads</li>
+        <li>📥 Instant downloads</li>
+      </ul>
+      <div class="d-grid">
+        <button class="btn btn-primary btn-sm" onclick="login()">Login with Google</button>
+      </div>
+    </div>
+
+    <!-- App Section -->
+    <div id="app-section" class="card p-4 d-none">
+      <p class="text-center">
+        Welcome, <span id="user-email" class="fw-bold text-success"></span>!
+        <button class="btn btn-sm btn-outline-danger ms-2" onclick="logout()">Logout</button>
+      </p>
+
+      <h2 class="h6 mt-4">Your Files</h2>
+      <div id="file-list" class="mb-3">Loading...</div>
+
+      <h3 class="h6 mt-4">Upload New File</h3>
+      <div class="mb-3">
+        <input type="file" id="file-input" class="form-control" />
+      </div>
+      <button class="btn btn-success btn-sm" onclick="uploadFile()">Upload</button>
+    </div>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-auth-compat.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      // copy the config data from the firebase account
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const provider = new firebase.auth.GoogleAuthProvider();
+
+    let currentUserEmail = "";
+    let currentDisplayName = "";
+
+    async function login() {
+      try {
+        const result = await auth.signInWithPopup(provider);
+        const user = result.user;
+        currentUserEmail = user.email;
+        currentDisplayName = user.displayName;
+        document.getElementById("user-email").textContent = currentUserEmail;
+        await registerUser();
+        loadFiles();
+        document.getElementById("login-section").classList.add("d-none");
+        document.getElementById("app-section").classList.remove("d-none");
+      } catch (err) {
+        alert("Login failed: " + err.message);
+      }
+    }
+
+    function logout() {
+      auth.signOut();
+      location.reload();
+    }
+
+    async function registerUser() {
+      try {
+        await fetch("https://userfilemanagement.azurewebsites.net/api/registerUser", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: currentUserEmail, displayName: currentDisplayName })
+        });
+      } catch (err) {
+        console.error("Register user error:", err);
+      }
+    }
+
+    async function loadFiles() {
+      const container = document.getElementById("file-list");
+      container.innerHTML = "Loading...";
+      try {
+        const res = await fetch(`https://userfilemanagement.azurewebsites.net/api/listFiles?email=${encodeURIComponent(currentUserEmail)}`);
+        const files = await res.json();
+        container.innerHTML = "";
+        if (!files || files.length === 0) {
+          container.textContent = "No files uploaded yet.";
+          return;
+        }
+        files.forEach(f => {
+          const div = document.createElement("div");
+          div.className = "file-item";
+          const blobName = f.id || f.rowKey;
+          const finalFilename = f.finalFilename || f.originalFilename;
+          div.innerHTML = `
+            <span>${finalFilename}</span>
+            <div class="d-flex gap-2 ms-3">
+              <button class="btn btn-sm btn-danger" onclick="deleteFile('${blobName}')">Delete</button>
+              <button class="btn btn-sm btn-primary" onclick="downloadFile('${blobName}', '${finalFilename}')">Download</button>
+            </div>
+          `;
+          container.appendChild(div);
+        });
+      } catch (err) {
+        container.innerHTML = "⚠️ Failed to load files.";
+        console.error("loadFiles error:", err);
+      }
+    }
+
+    function downloadFile(blobName, finalFilename) {
+      const downloadUrl = `https://userfilemanagement.azurewebsites.net/api/downloadFile?blobName=${encodeURIComponent(blobName)}&filename=${encodeURIComponent(finalFilename)}`;
+      window.open(downloadUrl, "_blank");
+    }
+
+    async function uploadFile() {
+      const input = document.getElementById("file-input");
+      if (!input.files.length) return alert("Select a file.");
+      const file = input.files[0];
+      const fileBuffer = await file.arrayBuffer();
+      try {
+        const res = await fetch(`https://userfilemanagement.azurewebsites.net/api/uploadFile?email=${encodeURIComponent(currentUserEmail)}&filename=${encodeURIComponent(file.name)}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "x-filename": file.name,
+            "x-user-email": currentUserEmail
+          },
+          body: fileBuffer
+        });
+        const text = await res.text();
+        let result;
+        try { result = JSON.parse(text); } catch { result = { message: text }; }
+        if (res.ok) {
+          alert("Upload successful.");
+          loadFiles();
+        } else {
+          alert("Upload failed: " + (result.message || "Unknown error"));
+        }
+      } catch (err) {
+        alert("Upload failed: " + err.message);
+      }
+    }
+
+    async function deleteFile(blobName) {
+      if (!confirm("Are you sure you want to delete this file?")) return;
+      try {
+        const res = await fetch(`https://userfilemanagement.azurewebsites.net/api/deleteFile/${encodeURIComponent(blobName)}`, {
+          method: "DELETE",
+          headers: {
+            "x-user-email": currentUserEmail
+          }
+        });
+        const msg = await res.text();
+        alert(msg);
+        loadFiles();
+      } catch (err) {
+        alert("Delete failed: " + err.message);
+      }
+    }
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        currentUserEmail = user.email;
+        currentDisplayName = user.displayName;
+        document.getElementById("user-email").textContent = currentUserEmail;
+        document.getElementById("login-section").classList.add("d-none");
+        document.getElementById("app-section").classList.remove("d-none");
+        loadFiles();
+      } else {
+        document.getElementById("login-section").classList.remove("d-none");
+      }
+    });
+  </script>
+</body>
+</html>
